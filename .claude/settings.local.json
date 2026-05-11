@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(npx tsc *)",
+      "Bash(where ffmpeg *)",
+      "Bash(ffmpeg -version)",
+      "PowerShell(winget install --id=Gyan.FFmpeg -e --accept-source-agreements --accept-package-agreements --silent)",
+      "PowerShell(& \"$env:LOCALAPPDATA\\\\Microsoft\\\\WinGet\\\\Links\\\\ffprobe.exe\" -v error -select_streams v:0 -show_entries stream=width,height,r_frame_rate,duration,nb_frames -of default=nw=1 \"C:\\\\Users\\\\dazaa\\\\Desktop\\\\Claud\\\\ARTT\\\\public\\\\videos\\\\atlas-180-transition.mp4\")",
+      "PowerShell(Get-ChildItem -Path \"$env:LOCALAPPDATA\\\\Microsoft\\\\WinGet\\\\Packages\" -Recurse -Filter \"ffmpeg.exe\" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName)",
+      "PowerShell(\\(Get-Item \"C:\\\\Users\\\\dazaa\\\\Desktop\\\\Claud\\\\ARTT\\\\public\\\\videos\\\\atlas-180-transition.mp4\"\\).Length / 1MB)",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git rm *)",
+      "Bash(git commit *)"
+    ]
+  }
+}
