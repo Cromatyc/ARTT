@@ -1,230 +1,169 @@
-import { Suspense, useEffect, useRef, useState } from "react";
-import { Canvas, useFrame } from "@react-three/fiber";
-import { Text, Float, useGLTF } from "@react-three/drei";
+import { useEffect, useRef, useState } from "react";
 import { motion, useScroll, useTransform, MotionValue } from "framer-motion";
-import * as THREE from "three";
 
 /**
- * Stylized 3D fallback: a slender humanoid silhouette holding a sphere overhead,
- * surrounded by floating digital tokens. Used when /models/atlas.glb is missing.
+ * Frame-by-frame scroll scrubber.
+ *
+ * Instead of relying on `<video>` + `currentTime` (which is unreliable across
+ * mobile browsers — iOS Safari and Android Chrome throttle or block seeks on
+ * paused video), we decode the 180° camera move into a sequence of JPGs at
+ * build time and paint the right frame to a <canvas> as the user scrolls.
+ *
+ * This is the same technique Apple uses on its product pages.
  */
-function AtlasPlaceholder({ rotationY, sphereSpin }: { rotationY: MotionValue<number>; sphereSpin: boolean }) {
-  const group = useRef<THREE.Group>(null);
-  const sphere = useRef<THREE.Mesh>(null);
-
-  useFrame((_, dt) => {
-    if (group.current) group.current.rotation.y = rotationY.get();
-    if (sphereSpin && sphere.current) sphere.current.rotation.y += dt * 0.25;
-  });
-
-  const tokens = ["IA", "Redes", "Gaming", "Pantallas", "Consumo", "Datos", "Scroll", "Likes"];
-
-  return (
-    <group ref={group} position={[0, -1.2, 0]}>
-      {/* Pedestal */}
-      <mesh position={[0, -0.05, 0]} receiveShadow>
-        <cylinderGeometry args={[1.1, 1.2, 0.1, 64]} />
-        <meshStandardMaterial color="#0a0a0a" metalness={0.4} roughness={0.6} />
-      </mesh>
-
-      {/* Legs */}
-      <mesh position={[-0.18, 0.6, 0]}>
-        <capsuleGeometry args={[0.13, 1.05, 8, 16]} />
-        <meshStandardMaterial color="#2a2522" metalness={0.7} roughness={0.35} />
-      </mesh>
-      <mesh position={[0.18, 0.6, 0]}>
-        <capsuleGeometry args={[0.13, 1.05, 8, 16]} />
-        <meshStandardMaterial color="#2a2522" metalness={0.7} roughness={0.35} />
-      </mesh>
-
-      {/* Torso */}
-      <mesh position={[0, 1.55, 0]}>
-        <capsuleGeometry args={[0.28, 0.7, 8, 16]} />
-        <meshStandardMaterial color="#3a302a" metalness={0.75} roughness={0.3} />
-      </mesh>
-
-      {/* Head */}
-      <mesh position={[0, 2.2, 0]}>
-        <sphereGeometry args={[0.18, 32, 32]} />
-        <meshStandardMaterial color="#3a302a" metalness={0.75} roughness={0.3} />
-      </mesh>
-
-      {/* Arms raised */}
-      <mesh position={[-0.45, 2.0, 0]} rotation={[0, 0, Math.PI / 4]}>
-        <capsuleGeometry args={[0.1, 0.9, 8, 16]} />
-        <meshStandardMaterial color="#3a302a" metalness={0.75} roughness={0.3} />
-      </mesh>
-      <mesh position={[0.45, 2.0, 0]} rotation={[0, 0, -Math.PI / 4]}>
-        <capsuleGeometry args={[0.1, 0.9, 8, 16]} />
-        <meshStandardMaterial color="#3a302a" metalness={0.75} roughness={0.3} />
-      </mesh>
-
-      {/* Sphere on top */}
-      <group position={[0, 3.05, 0]}>
-        <mesh ref={sphere}>
-          <sphereGeometry args={[0.8, 64, 64]} />
-          <meshStandardMaterial color="#1a1a1a" metalness={0.85} roughness={0.2} emissive="#0a0a0a" />
-        </mesh>
-        {/* Floating tokens around the sphere */}
-        {tokens.map((t, i) => {
-          const angle = (i / tokens.length) * Math.PI * 2;
-          const r = 1.15;
-          return (
-            <Float key={t} speed={1.4} rotationIntensity={0.3} floatIntensity={0.6}>
-              <Text
-                position={[Math.cos(angle) * r, Math.sin(angle * 0.5) * 0.25, Math.sin(angle) * r]}
-                fontSize={0.14}
-                color="#ffffff"
-                anchorX="center"
-                anchorY="middle"
-              >
-                {t}
-              </Text>
-            </Float>
-          );
-        })}
-      </group>
-    </group>
-  );
-}
-
-function GLBAtlas({ rotationY }: { rotationY: MotionValue<number> }) {
-  // Will throw to Suspense fallback if not found
-  const { scene } = useGLTF("/models/atlas.glb");
-  const ref = useRef<THREE.Group>(null);
-  useFrame(() => {
-    if (ref.current) ref.current.rotation.y = rotationY.get();
-  });
-  return (
-    <group ref={ref} position={[0, -1.2, 0]}>
-      <primitive object={scene} />
-    </group>
-  );
-}
-
-const scrollTexts = [
-  { range: [0.0, 0.16], text: "La figura aparece en silencio.", italic: true },
-  { range: [0.16, 0.32], text: "La cámara rodea el peso.", italic: false },
-  { range: [0.32, 0.48], text: "Los símbolos digitales se revelan.", italic: true },
-  { range: [0.48, 0.64], text: "El rostro desaparece.", italic: false },
-  { range: [0.64, 0.82], text: "El peso deja de ser físico.", italic: true },
-  { range: [0.82, 1.0], text: "Atlas somos nosotros.", italic: true },
-];
+const FRAME_COUNT = 122;
+const FRAME_URL = (i: number) =>
+  `/frames/f_${String(i).padStart(3, "0")}.jpg`;
 
 export default function ThreeDScrollExperience() {
   const sectionRef = useRef<HTMLElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [videoOk, setVideoOk] = useState<boolean | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const framesRef = useRef<HTMLImageElement[]>([]);
+  const [loaded, setLoaded] = useState(0);
+  const [ready, setReady] = useState(false);
 
   const { scrollYProgress } = useScroll({
     target: sectionRef,
     offset: ["start start", "end end"],
   });
 
-  // Scroll-driven rotation for 3D fallback (0 -> 180°)
-  const rotationY = useTransform(scrollYProgress, [0, 1], [0, Math.PI]);
-
-  // Smooth scroll-scrub: rAF loop lerps current toward target so seeks are
-  // batched once per animation frame and feel fluid even with sparse keyframes.
+  // Preload all frames. Critical frames (every 8th) first so the page becomes
+  // interactive quickly; the rest stream in and fill the gaps progressively.
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
+    let cancelled = false;
+    const images: HTMLImageElement[] = new Array(FRAME_COUNT);
+    let done = 0;
 
-    const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const loadOne = (idx: number) =>
+      new Promise<void>((resolve) => {
+        const img = new Image();
+        img.decoding = "async";
+        img.src = FRAME_URL(idx + 1);
+        img.onload = img.onerror = () => {
+          if (cancelled) return resolve();
+          images[idx] = img;
+          done += 1;
+          setLoaded(done);
+          // First frame ready → render immediately so user sees something.
+          if (idx === 0) {
+            framesRef.current = images;
+            setReady(true);
+            drawFrame(0);
+          }
+          resolve();
+        };
+      });
 
-    let target = scrollYProgress.get();
-    let current = target;
-    let rafId = 0;
-    let lastApplied = -1;
-    let unlocked = false;
+    // Two-phase preload: priority frames first, then the rest.
+    const priority: number[] = [];
+    const rest: number[] = [];
+    for (let i = 0; i < FRAME_COUNT; i++) {
+      (i % 8 === 0 ? priority : rest).push(i);
+    }
 
-    // iOS/Android require a user gesture before a paused <video> will
-    // actually render new frames on currentTime changes. We "unlock" it
-    // by calling play() then pausing immediately on first touch/click.
-    const unlock = () => {
-      if (unlocked) return;
-      unlocked = true;
-      const p = video.play();
-      if (p && typeof p.then === "function") {
-        p.then(() => video.pause()).catch(() => {});
-      } else {
-        try { video.pause(); } catch { /* noop */ }
+    (async () => {
+      for (const i of priority) {
+        if (cancelled) return;
+        await loadOne(i);
       }
-      window.removeEventListener("touchstart", unlock);
-      window.removeEventListener("touchend", unlock);
-      window.removeEventListener("click", unlock);
-      window.removeEventListener("scroll", unlock);
-    };
-    window.addEventListener("touchstart", unlock, { passive: true });
-    window.addEventListener("touchend", unlock, { passive: true });
-    window.addEventListener("click", unlock);
-    window.addEventListener("scroll", unlock, { passive: true });
-    // Try once eagerly (desktop / autoplay-allowed browsers).
-    unlock();
+      framesRef.current = images;
+      setReady(true);
+      // Remaining frames load in parallel batches.
+      const batchSize = 6;
+      for (let i = 0; i < rest.length; i += batchSize) {
+        if (cancelled) return;
+        await Promise.all(rest.slice(i, i + batchSize).map(loadOne));
+      }
+    })();
 
-    const ensurePaused = () => {
-      if (!video.paused) video.pause();
+    return () => {
+      cancelled = true;
     };
-    video.addEventListener("loadedmetadata", ensurePaused);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    const unsubscribe = scrollYProgress.on("change", (v) => {
-      target = v;
+  const drawFrame = (idx: number) => {
+    const canvas = canvasRef.current;
+    const frames = framesRef.current;
+    if (!canvas || !frames.length) return;
+
+    // Find nearest available frame (in case some haven't loaded yet)
+    let i = Math.max(0, Math.min(FRAME_COUNT - 1, Math.round(idx)));
+    let img = frames[i];
+    if (!img) {
+      // Search outward for the closest loaded frame
+      for (let d = 1; d < FRAME_COUNT; d++) {
+        if (frames[i - d]) { img = frames[i - d]; break; }
+        if (frames[i + d]) { img = frames[i + d]; break; }
+      }
+    }
+    if (!img) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // Resize canvas backing store to match its CSS size (DPR aware)
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    const needResize =
+      canvas.width !== Math.round(w * dpr) ||
+      canvas.height !== Math.round(h * dpr);
+    if (needResize) {
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+    }
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // object-contain: fit the image inside the canvas, preserving aspect ratio
+    const cw = canvas.width;
+    const ch = canvas.height;
+    const ir = img.naturalWidth / img.naturalHeight;
+    const cr = cw / ch;
+    let dw, dh;
+    if (ir > cr) {
+      dw = cw;
+      dh = cw / ir;
+    } else {
+      dh = ch;
+      dw = ch * ir;
+    }
+    const dx = (cw - dw) / 2;
+    const dy = (ch - dh) / 2;
+    ctx.drawImage(img, dx, dy, dw, dh);
+  };
+
+  // Smooth scroll-driven scrub: rAF lerp from current toward scroll target.
+  useEffect(() => {
+    if (!ready) return;
+    let target = scrollYProgress.get() * (FRAME_COUNT - 1);
+    let current = target;
+    let raf = 0;
+
+    const unsub = scrollYProgress.on("change", (p) => {
+      target = p * (FRAME_COUNT - 1);
     });
 
     const tick = () => {
-      current += (target - current) * 0.18;
-      const duration = video.duration;
-      if (duration && isFinite(duration)) {
-        const t = Math.max(0, Math.min(1, current)) * duration;
-        const delta = Math.abs(t - lastApplied);
-        // On mobile, only seek when the delta is larger (avoid flooding the
-        // decoder which mobile browsers throttle aggressively).
-        const threshold = isMobile ? 1 / 30 : 1 / 60;
-        if (delta > threshold) {
-          try {
-            video.currentTime = t;
-            lastApplied = t;
-            // iOS Safari trick: a momentary play()/pause() forces the
-            // freshly-seeked frame to actually paint to the screen.
-            if (isMobile && unlocked) {
-              const p = video.play();
-              if (p && typeof p.then === "function") {
-                p.then(() => video.pause()).catch(() => {});
-              }
-            }
-          } catch {
-            /* ignore seek-in-progress race */
-          }
-        }
-      }
-      rafId = requestAnimationFrame(tick);
+      current += (target - current) * 0.2;
+      drawFrame(current);
+      raf = requestAnimationFrame(tick);
     };
-    rafId = requestAnimationFrame(tick);
+    raf = requestAnimationFrame(tick);
+
+    const onResize = () => drawFrame(current);
+    window.addEventListener("resize", onResize);
 
     return () => {
-      cancelAnimationFrame(rafId);
-      unsubscribe();
-      video.removeEventListener("loadedmetadata", ensurePaused);
-      window.removeEventListener("touchstart", unlock);
-      window.removeEventListener("touchend", unlock);
-      window.removeEventListener("click", unlock);
-      window.removeEventListener("scroll", unlock);
+      cancelAnimationFrame(raf);
+      unsub();
+      window.removeEventListener("resize", onResize);
     };
-  }, [scrollYProgress]);
+  }, [ready, scrollYProgress]);
 
-  // Detect whether the video can load
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    const onMeta = () => setVideoOk(true);
-    const onError = () => setVideoOk(false);
-    video.addEventListener("loadedmetadata", onMeta);
-    video.addEventListener("error", onError);
-    return () => {
-      video.removeEventListener("loadedmetadata", onMeta);
-      video.removeEventListener("error", onError);
-    };
-  }, []);
+  // Map scroll → frame index for the "frame counter" UI
+  const frameIndex = useTransform(scrollYProgress, [0, 1], [1, FRAME_COUNT]);
 
   return (
     <section
@@ -234,32 +173,10 @@ export default function ThreeDScrollExperience() {
       style={{ height: "400vh" }}
     >
       <div className="sticky top-0 h-screen w-full overflow-hidden">
-        {/* Scroll-driven video — object-contain so the full figure (head to feet) stays in frame */}
-        <video
-          ref={videoRef}
-          className="absolute inset-0 w-full h-full object-contain"
-          src="/videos/atlas-180-transition.mp4"
-          muted
-          playsInline
-          preload="auto"
-          disablePictureInPicture
-          {...({ "webkit-playsinline": "true" } as Record<string, string>)}
+        <canvas
+          ref={canvasRef}
+          className="absolute inset-0 w-full h-full"
         />
-
-        {/* 3D fallback if video can't load */}
-        {videoOk === false && (
-          <div className="absolute inset-0">
-            <Canvas camera={{ position: [0, 1.4, 5.5], fov: 35 }} dpr={[1, 2]}>
-              <color attach="background" args={["#000"]} />
-              <ambientLight intensity={0.35} />
-              <directionalLight position={[3, 6, 4]} intensity={1.2} />
-              <directionalLight position={[-4, 2, -3]} intensity={0.35} color="#88aaff" />
-              <Suspense fallback={<AtlasPlaceholder rotationY={rotationY} sphereSpin />}>
-                <GLBAtlas rotationY={rotationY} />
-              </Suspense>
-            </Canvas>
-          </div>
-        )}
 
         {/* Cinematic vignette */}
         <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-transparent to-black/80 pointer-events-none" />
@@ -277,14 +194,36 @@ export default function ThreeDScrollExperience() {
           />
         ))}
 
+        {/* Loading indicator (subtle, top-right) */}
+        {loaded < FRAME_COUNT && (
+          <div className="absolute top-6 right-6 text-white/40 text-[10px] tracking-[0.3em] uppercase">
+            Cargando · {Math.round((loaded / FRAME_COUNT) * 100)}%
+          </div>
+        )}
+
         {/* Progress hint */}
         <div className="absolute bottom-8 left-1/2 -translate-x-1/2 text-white/40 text-xs tracking-[0.3em] uppercase">
           Desplázate para rodear a Atlas
         </div>
+
+        {/* Frame counter (editorial detail) */}
+        <motion.div className="absolute bottom-8 right-6 font-serif-it text-white/40 text-xs">
+          <motion.span>{frameIndex}</motion.span>
+          <span className="ml-1">/ {FRAME_COUNT}</span>
+        </motion.div>
       </div>
     </section>
   );
 }
+
+const scrollTexts = [
+  { range: [0.0, 0.16], text: "La figura aparece en silencio.", italic: true },
+  { range: [0.16, 0.32], text: "La cámara rodea el peso.", italic: false },
+  { range: [0.32, 0.48], text: "Los símbolos digitales se revelan.", italic: true },
+  { range: [0.48, 0.64], text: "El rostro desaparece.", italic: false },
+  { range: [0.64, 0.82], text: "El peso deja de ser físico.", italic: true },
+  { range: [0.82, 1.0], text: "Atlas somos nosotros.", italic: true },
+];
 
 function FloatingScrollText({
   index,
@@ -326,5 +265,3 @@ function FloatingScrollText({
     </motion.div>
   );
 }
-
-useGLTF.preload?.("/models/atlas.glb");
