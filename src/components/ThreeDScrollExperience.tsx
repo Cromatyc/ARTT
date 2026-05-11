@@ -241,10 +241,9 @@ export default function ThreeDScrollExperience() {
           src="/videos/atlas-180-transition.mp4"
           muted
           playsInline
-          // @ts-expect-error legacy iOS attribute
-          webkit-playsinline="true"
           preload="auto"
           disablePictureInPicture
+          {...({ "webkit-playsinline": "true" } as Record<string, string>)}
         />
 
         {/* 3D fallback if video can't load */}
